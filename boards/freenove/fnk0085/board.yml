@@ -1,0 +1,6 @@
+board:
+  name: fnk0085
+  full_name: Freenove ESP32-S3-WROOM Camera Board
+  vendor: freenove
+  socs:
+  - name: esp32s3

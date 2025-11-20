@@ -1,0 +1,21 @@
+identifier: fnk0085/esp32s3/procpu
+name: Freenove ESP32-S3 Cam PROCPU
+type: mcu
+arch: xtensa
+toolchain:
+  - zephyr
+supported:
+  - can
+  - counter
+  - dma
+  - entropy
+  - gpio
+  - i2c
+  - i2s
+  - input
+  - pwm
+  - sdhc
+  - spi
+  - uart
+  - watchdog
+vendor: freenove
