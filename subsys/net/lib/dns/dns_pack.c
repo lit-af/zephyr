@@ -195,8 +195,6 @@ int dns_unpack_response_header(struct dns_msg_t *msg, int src_id)
 {
 	uint8_t *dns_header;
 	uint16_t size;
-	int qdcount;
-	int ancount;
 	int rc;
 
 	dns_header = msg->msg;
@@ -231,16 +229,6 @@ int dns_unpack_response_header(struct dns_msg_t *msg, int src_id)
 
 	}
 
-	qdcount = dns_unpack_header_qdcount(dns_header);
-	ancount = dns_unpack_header_ancount(dns_header);
-
-	/* For mDNS (when src_id == 0) the query count is 0 so accept
-	 * the packet in that case.
-	 */
-	if ((qdcount < 1 && src_id > 0) || ancount < 1) {
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -252,7 +240,7 @@ static int dns_msg_pack_query_header(uint8_t *buf, uint16_t size, uint16_t id)
 		return -ENOMEM;
 	}
 
-	UNALIGNED_PUT(htons(id), (uint16_t *)(buf));
+	UNALIGNED_PUT(net_htons(id), (uint16_t *)(buf));
 
 	/* RD = 1, TC = 0, AA = 0, Opcode = 0, QR = 0 <-> 0x01 (1B)
 	 * RCode = 0, Z = 0, RA = 0		      <-> 0x00 (1B)
@@ -269,7 +257,7 @@ static int dns_msg_pack_query_header(uint8_t *buf, uint16_t size, uint16_t id)
 
 	offset += DNS_HEADER_FLAGS_LEN;
 	/* set question counter */
-	UNALIGNED_PUT(htons(1), (uint16_t *)(buf + offset));
+	UNALIGNED_PUT(net_htons(1), (uint16_t *)(buf + offset));
 
 	offset += DNS_QDCOUNT_LEN;
 	/* set answer and ns rr */
@@ -306,11 +294,11 @@ int dns_msg_pack_query(uint8_t *buf, uint16_t *len, uint16_t size,
 	offset += qname_len;
 
 	/* QType */
-	UNALIGNED_PUT(htons(qtype), (uint16_t *)(buf + offset + 0));
+	UNALIGNED_PUT(net_htons(qtype), (uint16_t *)(buf + offset + 0));
 	offset += DNS_QTYPE_LEN;
 
 	/* QClass */
-	UNALIGNED_PUT(htons(DNS_CLASS_IN), (uint16_t *)(buf + offset));
+	UNALIGNED_PUT(net_htons(DNS_CLASS_IN), (uint16_t *)(buf + offset));
 
 	*len = offset + DNS_QCLASS_LEN;
 

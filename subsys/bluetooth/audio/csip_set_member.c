@@ -520,8 +520,10 @@ static void csip_security_changed(struct bt_conn *conn, bt_security_t level,
 			return;
 		}
 
-		/* Check if client is set with FLAG_NOTIFY_LOCK */
-		if (atomic_test_bit(client->flags, FLAG_NOTIFY_LOCK)) {
+		/* Check if client has pending notifications */
+		if (atomic_test_bit(client->flags, FLAG_NOTIFY_LOCK) ||
+		    atomic_test_bit(client->flags, FLAG_NOTIFY_SIRK) ||
+		    atomic_test_bit(client->flags, FLAG_NOTIFY_SIZE)) {
 			notify_work_reschedule(K_NO_WAIT);
 			break;
 		}
@@ -1009,6 +1011,7 @@ int bt_csip_set_member_register(const struct bt_csip_set_member_register_param *
 
 int bt_csip_set_member_unregister(struct bt_csip_set_member_svc_inst *svc_inst)
 {
+	const struct bt_gatt_attr csis_definition[] = BT_CSIP_SERVICE_DEFINITION(svc_inst);
 	int err;
 
 	CHECKIF(svc_inst == NULL) {
@@ -1034,14 +1037,8 @@ int bt_csip_set_member_unregister(struct bt_csip_set_member_svc_inst *svc_inst)
 	}
 
 	/* Restore original declaration */
-
-	/* attrs_0 is an array of the original attributes, and while the actual number of attributes
-	 * may change, the size of the array stays the same, so we can use that to restore the
-	 * original attribute count
-	 */
-	(void)memcpy(svc_inst->service_p->attrs,
-		     (struct bt_gatt_attr[])BT_CSIP_SERVICE_DEFINITION(svc_inst), sizeof(attrs_0));
-	svc_inst->service_p->attr_count = ARRAY_SIZE(attrs_0);
+	(void)memcpy(svc_inst->service_p->attrs, csis_definition, sizeof(csis_definition));
+	svc_inst->service_p->attr_count = ARRAY_SIZE(csis_definition);
 
 	(void)k_work_cancel_delayable(&svc_inst->set_lock_timer);
 

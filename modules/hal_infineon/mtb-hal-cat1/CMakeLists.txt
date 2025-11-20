@@ -63,8 +63,12 @@ zephyr_library_sources_ifdef(CONFIG_SOC_PACKAGE_PSOC6_04_80_TQFP
 zephyr_library_sources_ifdef(CONFIG_SOC_PACKAGE_CYW20829_56_QFN
   ${hal_cat1b_dir}/source/pin_packages/cyhal_cyw20829_56_qfn.c)
 
+zephyr_library_sources_ifdef(CONFIG_SOC_PACKAGE_XMC7200_176_TEQFP
+  ${hal_cat1c_dir}/source/pin_packages/cyhal_xmc7200_176_teqfp.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_PACKAGE_XMC7200_272_BGA
   ${hal_cat1c_dir}/source/pin_packages/cyhal_xmc7200_272_bga.c)
+zephyr_library_sources_ifdef(CONFIG_SOC_PACKAGE_XMC7200_320_BGA
+  ${hal_cat1c_dir}/source/pin_packages/cyhal_xmc7200_320_bga.c.c)
 
 zephyr_library_sources_ifdef(CONFIG_SOC_DIE_CYW20829
   ${hal_cat1b_dir}/source/triggers/cyhal_triggers_cyw20829.c)
@@ -89,14 +93,11 @@ zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_TIMER   ${hal_dir}/source/cyhal
 zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_TRNG    ${hal_dir}/source/cyhal_trng.c)
 zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_UART    ${hal_dir}/source/cyhal_uart.c)
 zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_WDT     ${hal_dir}/source/cyhal_wdt.c)
-zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_DMA     ${hal_dir}/source/cyhal_dma.c)
-zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_DMA     ${hal_dir}/source/cyhal_dma_dw.c)
-zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_DMA     ${hal_dir}/source/cyhal_dma_dmac.c)
 
-if(CONFIG_USE_INFINEON_ADC OR CONFIG_USE_INFINEON_SMIF)
-  zephyr_library_sources(${hal_dir}/source/cyhal_dma.c)
-  zephyr_library_sources(${hal_dir}/source/cyhal_dma_dmac.c)
-  zephyr_library_sources(${hal_dir}/source/cyhal_dma_dw.c)
+if(CONFIG_USE_INFINEON_LEGACY_HAL)
+  zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_DMA     ${hal_dir}/source/cyhal_dma.c)
+  zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_DMA     ${hal_dir}/source/cyhal_dma_dw.c)
+  zephyr_library_sources_ifdef(CONFIG_USE_INFINEON_DMA     ${hal_dir}/source/cyhal_dma_dmac.c)
 endif()
 
 if(CONFIG_SOC_FAMILY_INFINEON_CAT1B)

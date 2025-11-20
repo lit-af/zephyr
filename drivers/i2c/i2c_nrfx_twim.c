@@ -224,10 +224,12 @@ static int i2c_nrfx_twim_init(const struct device *dev)
 	return i2c_nrfx_twim_common_init(dev);
 }
 
+#ifdef CONFIG_DEVICE_DEINIT_SUPPORT
 static int i2c_nrfx_twim_deinit(const struct device *dev)
 {
 	return i2c_nrfx_twim_common_deinit(dev);
 }
+#endif
 
 static DEVICE_API(i2c, i2c_nrfx_twim_driver_api) = {
 	.configure = i2c_nrfx_twim_configure,
@@ -285,7 +287,7 @@ static DEVICE_API(i2c, i2c_nrfx_twim_driver_api) = {
 				DT_PROP(I2C(idx), easydma_maxcnt_bits)),       \
 	};								       \
 	PM_DEVICE_DT_DEFINE(I2C(idx), twim_nrfx_pm_action,                     \
-			PM_DEVICE_ISR_SAFE);                                   \
+			I2C_PM_ISR_SAFE(idx));                                 \
 	I2C_DEVICE_DT_DEINIT_DEFINE(I2C(idx),				       \
 		      i2c_nrfx_twim_init,				       \
 		      i2c_nrfx_twim_deinit,				       \

@@ -1628,6 +1628,19 @@ void bt_gatt_cb_register(struct bt_gatt_cb *cb)
 	sys_slist_append(&callback_list, &cb->node);
 }
 
+int bt_gatt_cb_unregister(struct bt_gatt_cb *cb)
+{
+	if (cb == NULL) {
+		return -EINVAL;
+	}
+
+	if (!sys_slist_find_and_remove(&callback_list, &cb->node)) {
+		return -ENOENT;
+	}
+
+	return 0;
+}
+
 #if defined(CONFIG_BT_GATT_DYNAMIC_DB)
 static void db_changed(void)
 {
@@ -6023,9 +6036,9 @@ void bt_gatt_connected(struct bt_conn *conn)
 
 void bt_gatt_att_max_mtu_changed(struct bt_conn *conn, uint16_t tx, uint16_t rx)
 {
-	struct bt_gatt_cb *cb;
+	struct bt_gatt_cb *cb, *tmp;
 
-	SYS_SLIST_FOR_EACH_CONTAINER(&callback_list, cb, node) {
+	SYS_SLIST_FOR_EACH_CONTAINER_SAFE(&callback_list, cb, tmp, node) {
 		if (cb->att_mtu_updated) {
 			cb->att_mtu_updated(conn, tx, rx);
 		}
@@ -6589,4 +6602,55 @@ void bt_gatt_req_set_mtu(struct bt_att_req *req, uint16_t mtu)
 	 * just drop it here. Feel free to add this capability to other
 	 * request types if needed.
 	 */
+}
+
+/* Descriptor of application-specific authorization callbacks that are used
+ * with the CONFIG_BT_GATT_AUTHORIZATION_CUSTOM Kconfig enabled.
+ */
+static const struct bt_gatt_authorization_cb *authorization_cb;
+
+bool bt_gatt_attr_read_authorize(struct bt_conn *conn, const struct bt_gatt_attr *attr)
+{
+	if (!IS_ENABLED(CONFIG_BT_GATT_AUTHORIZATION_CUSTOM)) {
+		return true;
+	}
+
+	if (!authorization_cb || !authorization_cb->read_authorize) {
+		return true;
+	}
+
+	return authorization_cb->read_authorize(conn, attr);
+}
+
+bool bt_gatt_attr_write_authorize(struct bt_conn *conn, const struct bt_gatt_attr *attr)
+{
+	if (!IS_ENABLED(CONFIG_BT_GATT_AUTHORIZATION_CUSTOM)) {
+		return true;
+	}
+
+	if (!authorization_cb || !authorization_cb->write_authorize) {
+		return true;
+	}
+
+	return authorization_cb->write_authorize(conn, attr);
+}
+
+int bt_gatt_authorization_cb_register(const struct bt_gatt_authorization_cb *cb)
+{
+	if (!IS_ENABLED(CONFIG_BT_GATT_AUTHORIZATION_CUSTOM)) {
+		return -ENOSYS;
+	}
+
+	if (!cb) {
+		authorization_cb = NULL;
+		return 0;
+	}
+
+	if (authorization_cb) {
+		return -EALREADY;
+	}
+
+	authorization_cb = cb;
+
+	return 0;
 }

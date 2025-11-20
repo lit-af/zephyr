@@ -277,9 +277,10 @@ struct rtio_iodev_sqe;
  * @brief Callback signature for RTIO_OP_CALLBACK
  * @param r RTIO context being used with the callback
  * @param sqe Submission for the callback op
+ * @param res Result of the previously linked submission.
  * @param arg0 Argument option as part of the sqe
  */
-typedef void (*rtio_callback_t)(struct rtio *r, const struct rtio_sqe *sqe, void *arg0);
+typedef void (*rtio_callback_t)(struct rtio *r, const struct rtio_sqe *sqe, int res, void *arg0);
 
 /**
  * @typedef rtio_signaled_t
@@ -580,7 +581,7 @@ struct rtio_iodev {
 /** An operation to sends I3C CCC */
 #define RTIO_OP_I3C_CCC (RTIO_OP_I3C_CONFIGURE+1)
 
-/** An operation to suspend bus while awaiting signal */
+/** An operation to await a signal while blocking the iodev (if one is provided) */
 #define RTIO_OP_AWAIT (RTIO_OP_I3C_CCC+1)
 
 /**
@@ -745,6 +746,20 @@ static inline void rtio_sqe_prep_transceive(struct rtio_sqe *sqe,
 	sqe->userdata = userdata;
 }
 
+/**
+ * @brief Prepare an await op submission
+ *
+ * The await operation will await the completion signal before the sqe completes.
+ *
+ * If an rtio_iodev is provided then it will be blocked while awaiting. This facilitates a
+ * low-latency continuation of the rtio sequence, a sort of "critical section" during a bus
+ * operation if you will.
+ * Note that it is the responsibility of the rtio_iodev driver to properly block during the
+ * operation.
+ *
+ * See @ref rtio_sqe_prep_await_iodev for a helper, where an rtio_iodev is blocked.
+ * See @ref rtio_sqe_prep_await_executor for a helper, where no rtio_iodev is blocked.
+ */
 static inline void rtio_sqe_prep_await(struct rtio_sqe *sqe,
 				       const struct rtio_iodev *iodev,
 				       int8_t prio,
@@ -755,6 +770,39 @@ static inline void rtio_sqe_prep_await(struct rtio_sqe *sqe,
 	sqe->prio = prio;
 	sqe->iodev = iodev;
 	sqe->userdata = userdata;
+}
+
+/**
+ * @brief Prepare an await op submission which blocks an rtio_iodev until completion
+ *
+ * This variant can be useful if the await op is part of a sequence which must run within a tight
+ * time window as it effectively keeps the underlying bus locked while awaiting completion.
+ * Note that it is the responsibility of the rtio_iodev driver to properly block during the
+ * operation.
+ *
+ * See @ref rtio_sqe_prep_await for details.
+ * See @ref rtio_sqe_prep_await_executor for a counterpart where no rtio_iodev is blocked.
+ */
+static inline void rtio_sqe_prep_await_iodev(struct rtio_sqe *sqe, const struct rtio_iodev *iodev,
+					     int8_t prio, void *userdata)
+{
+	__ASSERT_NO_MSG(iodev != NULL);
+	rtio_sqe_prep_await(sqe, iodev, prio, userdata);
+}
+
+/**
+ * @brief Prepare an await op submission which completes the sqe after being signaled
+ *
+ * This variant can be useful when the await op serves as a logical piece of a sequence without
+ * requirements for a low-latency continuation of the sequence upon completion, or if the await
+ * op is expected to take "a long time" to complete.
+ *
+ * See @ref rtio_sqe_prep_await for details.
+ * See @ref rtio_sqe_prep_await_iodev for a counterpart where an rtio_iodev is blocked.
+ */
+static inline void rtio_sqe_prep_await_executor(struct rtio_sqe *sqe, int8_t prio, void *userdata)
+{
+	rtio_sqe_prep_await(sqe, NULL, prio, userdata);
 }
 
 static inline void rtio_sqe_prep_delay(struct rtio_sqe *sqe,
@@ -1001,13 +1049,16 @@ static inline uint32_t rtio_sqe_acquirable(struct rtio *r)
  * @param iodev_sqe Submission queue entry
  *
  * @retval NULL if current sqe is last in transaction
- * @retval struct rtio_sqe * if available
+ * @return struct rtio_sqe * if available
  */
 static inline struct rtio_iodev_sqe *rtio_txn_next(const struct rtio_iodev_sqe *iodev_sqe)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, txn_next, iodev_sqe->r, iodev_sqe);
 	if (iodev_sqe->sqe.flags & RTIO_SQE_TRANSACTION) {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, txn_next, iodev_sqe->r, iodev_sqe->next);
 		return iodev_sqe->next;
 	} else {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, txn_next, iodev_sqe->r, NULL);
 		return NULL;
 	}
 }
@@ -1019,13 +1070,16 @@ static inline struct rtio_iodev_sqe *rtio_txn_next(const struct rtio_iodev_sqe *
  * @param iodev_sqe Submission queue entry
  *
  * @retval NULL if current sqe is last in chain
- * @retval struct rtio_sqe * if available
+ * @return struct rtio_sqe * if available
  */
 static inline struct rtio_iodev_sqe *rtio_chain_next(const struct rtio_iodev_sqe *iodev_sqe)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, txn_next, iodev_sqe->r, iodev_sqe);
 	if (iodev_sqe->sqe.flags & RTIO_SQE_CHAINED) {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, txn_next, iodev_sqe->r, iodev_sqe->next);
 		return iodev_sqe->next;
 	} else {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, txn_next, iodev_sqe->r, NULL);
 		return NULL;
 	}
 }
@@ -1036,7 +1090,7 @@ static inline struct rtio_iodev_sqe *rtio_chain_next(const struct rtio_iodev_sqe
  * @param iodev_sqe Submission queue entry
  *
  * @retval NULL if current sqe is last in chain
- * @retval struct rtio_iodev_sqe * if available
+ * @return struct rtio_iodev_sqe * if available
  */
 static inline struct rtio_iodev_sqe *rtio_iodev_sqe_next(const struct rtio_iodev_sqe *iodev_sqe)
 {
@@ -1053,15 +1107,63 @@ static inline struct rtio_iodev_sqe *rtio_iodev_sqe_next(const struct rtio_iodev
  */
 static inline struct rtio_sqe *rtio_sqe_acquire(struct rtio *r)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, sqe_acquire, r);
 	struct rtio_iodev_sqe *iodev_sqe = rtio_sqe_pool_alloc(r->sqe_pool);
 
 	if (iodev_sqe == NULL) {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, sqe_acquire, r, NULL);
 		return NULL;
 	}
 
 	mpsc_push(&r->sq, &iodev_sqe->q);
 
+	SYS_PORT_TRACING_FUNC_EXIT(rtio, sqe_acquire, r, &iodev_sqe->sqe);
 	return &iodev_sqe->sqe;
+}
+
+/**
+ * @brief Acquire a number of submission queue events if available
+ *
+ * @warning The sqe array is in an undefined state if the return value is -ENOMEM
+ *
+ * @param r RTIO context
+ * @param n Number of submission queue events to acquire
+ * @param sqes A pointer to an array of rtio_sqe struct pointers of size n
+ *
+ * @retval 0 success
+ * @retval -ENOMEM out of memory
+ */
+static inline int rtio_sqe_acquire_array(struct rtio *r, size_t n, struct rtio_sqe **sqes)
+{
+	struct rtio_iodev_sqe *iodev_sqe;
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		iodev_sqe = rtio_sqe_pool_alloc(r->sqe_pool);
+		if (iodev_sqe == NULL) {
+			break;
+		}
+		sqes[i] = &iodev_sqe->sqe;
+	}
+
+	/* Not enough SQEs in the pool */
+	if (i < n) {
+		while (i > 0) {
+			i--;
+			iodev_sqe = CONTAINER_OF(sqes[i], struct rtio_iodev_sqe, sqe);
+			rtio_sqe_pool_free(r->sqe_pool, iodev_sqe);
+			sqes[i] = NULL;
+		}
+
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < n; i++) {
+		iodev_sqe = CONTAINER_OF(sqes[i], struct rtio_iodev_sqe, sqe);
+		mpsc_push(&r->sq, &iodev_sqe->q);
+	}
+
+	return 0;
 }
 
 /**
@@ -1086,14 +1188,17 @@ static inline void rtio_sqe_drop_all(struct rtio *r)
  */
 static inline struct rtio_cqe *rtio_cqe_acquire(struct rtio *r)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, cqe_acquire, r);
 	struct rtio_cqe *cqe = rtio_cqe_pool_alloc(r->cqe_pool);
 
 	if (cqe == NULL) {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, cqe_acquire, r, NULL);
 		return NULL;
 	}
 
 	memset(cqe, 0, sizeof(struct rtio_cqe));
 
+	SYS_PORT_TRACING_FUNC_EXIT(rtio, cqe_acquire, r, cqe);
 	return cqe;
 }
 
@@ -1118,21 +1223,25 @@ static inline void rtio_cqe_produce(struct rtio *r, struct rtio_cqe *cqe)
  */
 static inline struct rtio_cqe *rtio_cqe_consume(struct rtio *r)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, cqe_consume, r);
 	struct mpsc_node *node;
 	struct rtio_cqe *cqe = NULL;
 
 #ifdef CONFIG_RTIO_CONSUME_SEM
 	if (k_sem_take(r->consume_sem, K_NO_WAIT) != 0) {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, cqe_consume, r, NULL);
 		return NULL;
 	}
 #endif
 
 	node = mpsc_pop(&r->cq);
 	if (node == NULL) {
+		SYS_PORT_TRACING_FUNC_EXIT(rtio, cqe_consume, r, NULL);
 		return NULL;
 	}
 	cqe = CONTAINER_OF(node, struct rtio_cqe, q);
 
+	SYS_PORT_TRACING_FUNC_EXIT(rtio, cqe_consume, r, cqe);
 	return cqe;
 }
 
@@ -1172,6 +1281,7 @@ static inline struct rtio_cqe *rtio_cqe_consume_block(struct rtio *r)
  */
 static inline void rtio_cqe_release(struct rtio *r, struct rtio_cqe *cqe)
 {
+	SYS_PORT_TRACING_FUNC(rtio, cqe_release, r, cqe);
 	rtio_cqe_pool_free(r->cqe_pool, cqe);
 }
 
@@ -1326,6 +1436,7 @@ static inline void rtio_iodev_sqe_err(struct rtio_iodev_sqe *iodev_sqe, int resu
  */
 static inline void rtio_cqe_submit(struct rtio *r, int result, void *userdata, uint32_t flags)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, cqe_submit, r, result, flags);
 	struct rtio_cqe *cqe = rtio_cqe_acquire(r);
 
 	if (cqe == NULL) {
@@ -1358,6 +1469,7 @@ static inline void rtio_cqe_submit(struct rtio *r, int result, void *userdata, u
 		}
 	}
 #endif
+	SYS_PORT_TRACING_FUNC_EXIT(rtio, cqe_submit, r);
 }
 
 #define __RTIO_MEMPOOL_GET_NUM_BLKS(num_bytes, blk_size) (((num_bytes) + (blk_size)-1) / (blk_size))
@@ -1498,6 +1610,7 @@ __syscall int rtio_sqe_cancel(struct rtio_sqe *sqe);
 
 static inline int z_impl_rtio_sqe_cancel(struct rtio_sqe *sqe)
 {
+	SYS_PORT_TRACING_FUNC(rtio, sqe_cancel, sqe);
 	struct rtio_iodev_sqe *iodev_sqe = CONTAINER_OF(sqe, struct rtio_iodev_sqe, sqe);
 
 	do {
@@ -1676,6 +1789,7 @@ __syscall int rtio_submit(struct rtio *r, uint32_t wait_count);
 #ifdef CONFIG_RTIO_SUBMIT_SEM
 static inline int z_impl_rtio_submit(struct rtio *r, uint32_t wait_count)
 {
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, submit, r, wait_count);
 	int res = 0;
 
 	if (wait_count > 0) {
@@ -1694,12 +1808,14 @@ static inline int z_impl_rtio_submit(struct rtio *r, uint32_t wait_count)
 			 "semaphore was reset or timed out while waiting on completions!");
 	}
 
+	SYS_PORT_TRACING_FUNC_EXIT(rtio, submit, r);
 	return res;
 }
 #else
 static inline int z_impl_rtio_submit(struct rtio *r, uint32_t wait_count)
 {
 
+	SYS_PORT_TRACING_FUNC_ENTER(rtio, submit, r, wait_count);
 	int res = 0;
 	uintptr_t cq_count = (uintptr_t)atomic_get(&r->cq_count);
 	uintptr_t cq_complete_count = cq_count + wait_count;
@@ -1719,6 +1835,7 @@ static inline int z_impl_rtio_submit(struct rtio *r, uint32_t wait_count)
 		k_yield();
 	}
 
+	SYS_PORT_TRACING_FUNC_EXIT(rtio, submit, r);
 	return res;
 }
 #endif /* CONFIG_RTIO_SUBMIT_SEM */

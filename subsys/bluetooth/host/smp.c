@@ -4,6 +4,7 @@
  */
 
 /*
+ * Copyright (c) 2025 Xiaomi Corporation
  * Copyright (c) 2017-2025 Nordic Semiconductor ASA
  * Copyright (c) 2015-2016 Intel Corporation
  *
@@ -222,10 +223,10 @@ struct bt_smp {
 	atomic_t			bondable;
 };
 
-static unsigned int fixed_passkey = BT_PASSKEY_INVALID;
+static unsigned int fixed_passkey = BT_PASSKEY_RAND;
 
 #define DISPLAY_FIXED(smp) (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) && \
-			    fixed_passkey != BT_PASSKEY_INVALID && \
+			    fixed_passkey != BT_PASSKEY_RAND && \
 			    (smp)->method == PASSKEY_DISPLAY)
 
 #if !defined(CONFIG_BT_SMP_SC_PAIR_ONLY)
@@ -363,9 +364,21 @@ static uint8_t get_io_capa(struct bt_smp *smp)
 		return BT_SMP_IO_DISPLAY_YESNO;
 	}
 
+#if defined(CONFIG_BT_APP_PASSKEY)
+	/* Implementation of the app_passkey cb implies that the application can "know" the passkey
+	 * without actually having a display, thus earning the "display" capability.
+	 */
+	if (smp_auth_cb->app_passkey) {
+		if (smp_auth_cb->passkey_entry) {
+			return BT_SMP_IO_KEYBOARD_DISPLAY;
+		}
+
+		return BT_SMP_IO_DISPLAY_ONLY;
+	}
+#endif /* CONFIG_BT_APP_PASSKEY */
+
 	if (smp_auth_cb->passkey_entry) {
-		if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) &&
-		    fixed_passkey != BT_PASSKEY_INVALID) {
+		if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) && fixed_passkey != BT_PASSKEY_RAND) {
 			return BT_SMP_IO_KEYBOARD_DISPLAY;
 		} else {
 			return BT_SMP_IO_KEYBOARD_ONLY;
@@ -377,8 +390,7 @@ static uint8_t get_io_capa(struct bt_smp *smp)
 	}
 
 no_callbacks:
-	if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) &&
-	    fixed_passkey != BT_PASSKEY_INVALID) {
+	if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) && fixed_passkey != BT_PASSKEY_RAND) {
 		return BT_SMP_IO_DISPLAY_ONLY;
 	} else {
 		return BT_SMP_IO_NO_INPUT_OUTPUT;
@@ -705,7 +717,7 @@ static void smp_check_complete(struct bt_conn *conn, uint8_t dist_complete)
 {
 	struct bt_l2cap_chan *chan;
 
-	if (conn->type == BT_CONN_TYPE_LE) {
+	if (bt_conn_is_le(conn)) {
 		struct bt_smp *smp;
 
 		chan = bt_l2cap_le_lookup_tx_cid(conn, BT_L2CAP_CID_SMP);
@@ -723,7 +735,7 @@ static void smp_check_complete(struct bt_conn *conn, uint8_t dist_complete)
 	}
 
 #if defined(CONFIG_BT_CLASSIC)
-	if (conn->type == BT_CONN_TYPE_BR) {
+	if (bt_conn_is_br(conn)) {
 		struct bt_smp_br *smp;
 
 		chan = bt_l2cap_br_lookup_tx_cid(conn, BT_L2CAP_CID_BR_SMP);
@@ -2020,7 +2032,15 @@ static void smp_timeout(struct k_work *work)
 	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
 	struct bt_smp *smp = CONTAINER_OF(dwork, struct bt_smp, work);
 
-	LOG_ERR("SMP Timeout");
+	/* if number of flags or supported commands exceed capacity of one
+	 * atomic variable following error log shall be extended
+	 */
+	BUILD_ASSERT(ATOMIC_BITMAP_SIZE(SMP_NUM_FLAGS) == 1);
+	BUILD_ASSERT(ATOMIC_BITMAP_SIZE(BT_SMP_NUM_CMDS) == 1);
+
+	LOG_ERR("SMP Timeout (flags:0x%08x allowed_cmds:0x%08x)",
+		(unsigned int)atomic_get(&smp->flags[0]),
+		(unsigned int)atomic_get(&smp->allowed_cmds[0]));
 
 	smp_pairing_complete(smp, BT_SMP_ERR_UNSPECIFIED);
 
@@ -2467,7 +2487,6 @@ static uint8_t legacy_request_tk(struct bt_smp *smp)
 	struct bt_conn *conn = smp->chan.chan.conn;
 	const struct bt_conn_auth_cb *smp_auth_cb = latch_auth_cb(smp);
 	struct bt_keys *keys;
-	uint32_t passkey;
 
 	/*
 	 * Fail if we have keys that are stronger than keys that will be
@@ -2495,11 +2514,25 @@ static uint8_t legacy_request_tk(struct bt_smp *smp)
 		}
 
 		break;
-	case PASSKEY_DISPLAY:
-		if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) &&
-		    fixed_passkey != BT_PASSKEY_INVALID) {
+	case PASSKEY_DISPLAY: {
+		uint32_t passkey;
+
+		if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) && fixed_passkey != BT_PASSKEY_RAND) {
 			passkey = fixed_passkey;
-		} else  {
+#if defined(CONFIG_BT_APP_PASSKEY)
+		} else if (smp_auth_cb && smp_auth_cb->app_passkey) {
+			passkey = smp_auth_cb->app_passkey(conn);
+
+			if (passkey != BT_PASSKEY_RAND && passkey > 999999) {
+				LOG_WRN("App-provided passkey is out of valid range: %u", passkey);
+				return BT_SMP_ERR_UNSPECIFIED;
+			}
+#endif /* CONFIG_BT_APP_PASSKEY */
+		} else {
+			passkey = BT_PASSKEY_RAND;
+		}
+
+		if (passkey == BT_PASSKEY_RAND) {
 			if (bt_rand(&passkey, sizeof(passkey))) {
 				return BT_SMP_ERR_UNSPECIFIED;
 			}
@@ -2519,6 +2552,7 @@ static uint8_t legacy_request_tk(struct bt_smp *smp)
 		sys_put_le32(passkey, smp->tk);
 
 		break;
+	}
 	case PASSKEY_INPUT:
 		atomic_set_bit(smp->flags, SMP_FLAG_USER);
 		smp_auth_cb->passkey_entry(conn);
@@ -4421,18 +4455,32 @@ __maybe_unused static uint8_t display_passkey(struct bt_smp *smp)
 {
 	struct bt_conn *conn = smp->chan.chan.conn;
 	const struct bt_conn_auth_cb *smp_auth_cb = latch_auth_cb(smp);
+	uint32_t passkey = BT_PASSKEY_RAND;
 
-	if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) &&
-	    fixed_passkey != BT_PASSKEY_INVALID) {
-		smp->passkey = fixed_passkey;
-	} else {
-		if (bt_rand(&smp->passkey, sizeof(smp->passkey))) {
+	if (IS_ENABLED(CONFIG_BT_FIXED_PASSKEY) && fixed_passkey != BT_PASSKEY_RAND) {
+		passkey = fixed_passkey;
+	}
+
+#if defined(CONFIG_BT_APP_PASSKEY)
+	if (smp_auth_cb && smp_auth_cb->app_passkey) {
+		passkey = smp_auth_cb->app_passkey(conn);
+
+		if (passkey != BT_PASSKEY_RAND && passkey > 999999) {
+			LOG_WRN("App-provided passkey is out of valid range: %u", passkey);
+			return BT_SMP_ERR_UNSPECIFIED;
+		}
+	}
+#endif /* CONFIG_BT_APP_PASSKEY */
+
+	if (passkey == BT_PASSKEY_RAND) {
+		if (bt_rand(&passkey, sizeof(passkey))) {
 			return BT_SMP_ERR_UNSPECIFIED;
 		}
 
-		smp->passkey %= 1000000;
+		passkey %= 1000000;
 	}
 
+	smp->passkey = passkey;
 	smp->passkey_round = 0U;
 
 	if (smp_auth_cb && smp_auth_cb->passkey_display) {
@@ -5681,12 +5729,12 @@ int bt_conn_set_bondable(struct bt_conn *conn, bool enable)
 {
 	struct bt_smp *smp;
 
-	if (!bt_conn_is_type(conn, BT_CONN_TYPE_LE | BT_CONN_TYPE_BR)) {
+	if (!bt_conn_is_br(conn) && !bt_conn_is_le(conn)) {
 		LOG_DBG("Invalid connection type: %u for %p", conn->type, conn);
 		return -EINVAL;
 	}
 
-	if (IS_ENABLED(CONFIG_BT_CLASSIC) && (conn->type == BT_CONN_TYPE_BR)) {
+	if (bt_conn_is_br(conn)) {
 		if (enable && atomic_test_and_set_bit(conn->flags, BT_CONN_BR_BONDABLE)) {
 			return -EALREADY;
 		}
@@ -6164,8 +6212,8 @@ int bt_smp_auth_pairing_confirm(struct bt_conn *conn)
 #if defined(CONFIG_BT_FIXED_PASSKEY)
 int bt_passkey_set(unsigned int passkey)
 {
-	if (passkey == BT_PASSKEY_INVALID) {
-		fixed_passkey = BT_PASSKEY_INVALID;
+	if (passkey == BT_PASSKEY_INVALID || passkey == BT_PASSKEY_RAND) {
+		fixed_passkey = BT_PASSKEY_RAND;
 		return 0;
 	}
 
@@ -6346,7 +6394,10 @@ static int bt_smp_accept(struct bt_conn *conn, struct bt_l2cap_chan **chan)
 	return -ENOMEM;
 }
 
-BT_L2CAP_CHANNEL_DEFINE(smp_fixed_chan, BT_L2CAP_CID_SMP, bt_smp_accept, NULL);
+BT_L2CAP_FIXED_CHANNEL_DEFINE(smp_fixed_chan) = {
+	.cid = BT_L2CAP_CID_SMP,
+	.accept = bt_smp_accept,
+};
 #if defined(CONFIG_BT_CLASSIC)
 BT_L2CAP_BR_CHANNEL_DEFINE(smp_br_fixed_chan, BT_L2CAP_CID_BR_SMP,
 			bt_smp_br_accept);
